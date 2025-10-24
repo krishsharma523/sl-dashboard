@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import os
 
 import numpy as np
 import pandas as pd
@@ -221,9 +222,22 @@ def _holt_winters_forecast(y: pd.Series, periods: int) -> np.ndarray:
 
 # --------------- API ----------------
 app = FastAPI()
+
+# ---- CORS (Vercel + Localhost) ----
+# Add more comma-separated origins via env var ALLOWED_ORIGINS if needed.
+extra_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+] + extra_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True
+    allow_origins=allowed_origins,                  # explicit list (safe with credentials)
+    allow_origin_regex=r"https://.*\.vercel\.app$", # any vercel.app deployment
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/health")
@@ -271,7 +285,7 @@ def predict(commodity: str, region: str = Query("All"), horizon: int = Query(1))
     fc6 = _holt_winters_forecast(sub[PRICE_COL], 6)
     fdates = [(last_date + pd.DateOffset(months=i)).date().isoformat() for i in range(1, 7)]
 
-    def pct(v): 
+    def pct(v):
         return None if (v is None or not np.isfinite(v) or abs(current_price) < 1e-9) else (float(v) - current_price) / current_price * 100.0
 
     bundle = {
