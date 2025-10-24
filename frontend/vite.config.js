@@ -3,8 +3,6 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  server: {
-    port: 5174,
-    strictPort: false,       // ← Vite will bump to 5175, 5176, ...
-  },
+  build: { outDir: "dist" },   // Vercel expects 'dist'
+  base: "/",                   // safe default for SPA
 });
