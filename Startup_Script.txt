@@ -1,0 +1,47 @@
+1.	Go to the backend folder
+cd ..\backend
+2.	Allow running the activate script 
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+3.	Activate the virtualenv (yours lives one level up at .venv)
+# from the backend folder:
+Test-Path ..\.venv\Scripts\Activate.ps1
+# if this prints True:
+& ..\.venv\Scripts\Activate.ps1
+If that prints False, create one locally and activate:
+python -m venv .venv
+& .\.venv\Scripts\Activate.ps1
+4.	Install backend dependencies (minimal set for the app.py I gave you)
+(SHAP is optional; skip it if you hit build issues)
+python -m pip install --upgrade pip
+python -m pip install flask flask-cors pandas scikit-learn xgboost
+# Optional (only if you want SHAP endpoints working)
+python -m pip install "numpy<2" shap
+5.	Run the backend
+python app.py
+
+or
+uvicorn app:app --reload --port 8000
+You should see:
+[BOOT] Starting Flask on http://127.0.0.1:8000
+ * Running on http://0.0.0.0:8000
+
+
+
+cd C:\sl-forecast-dashboard-vscode\sl-forecast-dashboard-vscode\frontend
+& "$Env:ProgramFiles\nodejs\npm.cmd" install
+& "$Env:ProgramFiles\nodejs\npm.cmd" run dev
+
+
+(.venv) PS C:\Users\Dell\PycharmProjects\Programming_Practice1\sl-forecast-dashboard-vscode\sl-forecast-dashboard-vscode\frontend> & "$Env:ProgramFiles\nodejs\npm.cmd" run dev
+
+winget install Cloudflare.cloudflared
+
+setx PATH "$($Env:Path);C:\Program Files\cloudflared"
+
+Go to frontend folder
+
+cloudflared tunnel --url http://localhost:5174
+
+Go to backend folder
+
+cloudflared tunnel --url http://localhost:8000

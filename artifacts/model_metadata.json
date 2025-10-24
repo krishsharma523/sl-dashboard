@@ -1,0 +1,102 @@
+[
+  {
+    "horizon": 1,
+    "region": "Eastern",
+    "target_base": "price_sll",
+    "MAE": 0.21456356496705267,
+    "RMSE": 0.31844724644390543,
+    "MAPE": 2.227063229367049,
+    "n_train": 280,
+    "n_test": 70
+  },
+  {
+    "horizon": 1,
+    "region": "North Western",
+    "target_base": "price_sll",
+    "MAE": 0.2821448844259588,
+    "RMSE": 0.42417920574453294,
+    "MAPE": 2.8933567119046892,
+    "n_train": 265,
+    "n_test": 66
+  },
+  {
+    "horizon": 1,
+    "region": "Northern",
+    "target_base": "price_sll",
+    "MAE": 0.272115324334497,
+    "RMSE": 0.37465456692629256,
+    "MAPE": 2.7643657204211447,
+    "n_train": 270,
+    "n_test": 67
+  },
+  {
+    "horizon": 1,
+    "region": "Southern",
+    "target_base": "price_sll",
+    "MAE": 0.2562011521663644,
+    "RMSE": 0.345535467847988,
+    "MAPE": 2.5899949295219304,
+    "n_train": 282,
+    "n_test": 70
+  },
+  {
+    "horizon": 1,
+    "region": "Western Area",
+    "target_base": "price_sll",
+    "MAE": 0.18758103199789147,
+    "RMSE": 0.2536220914636399,
+    "MAPE": 1.8983448190131198,
+    "n_train": 177,
+    "n_test": 44
+  },
+  {
+    "horizon": 3,
+    "region": "Eastern",
+    "target_base": "price_sll",
+    "MAE": 0.2868565779026908,
+    "RMSE": 0.3989477198668837,
+    "MAPE": 2.9458535532447234,
+    "n_train": 276,
+    "n_test": 68
+  },
+  {
+    "horizon": 3,
+    "region": "North Western",
+    "target_base": "price_sll",
+    "MAE": 0.3410339650440805,
+    "RMSE": 0.44700368641010907,
+    "MAPE": 3.4809445248707895,
+    "n_train": 260,
+    "n_test": 65
+  },
+  {
+    "horizon": 3,
+    "region": "Northern",
+    "target_base": "price_sll",
+    "MAE": 0.3201151387869368,
+    "RMSE": 0.4608411783179638,
+    "MAPE": 3.2343684902376366,
+    "n_train": 265,
+    "n_test": 66
+  },
+  {
+    "horizon": 3,
+    "region": "Southern",
+    "target_base": "price_sll",
+    "MAE": 0.3201478221211482,
+    "RMSE": 0.4294823472154551,
+    "MAPE": 3.1968547655622737,
+    "n_train": 277,
+    "n_test": 69
+  },
+  {
+    "horizon": 3,
+    "region": "Western Area",
+    "target_base": "price_sll",
+    "MAE": 0.2413016151158702,
+    "RMSE": 0.2896346515817868,
+    "MAPE": 2.416167611222693,
+    "n_train": 172,
+    "n_test": 43
+  }
+]
