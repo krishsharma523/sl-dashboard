@@ -1,0 +1,7 @@
+{
+  "routes": [
+    { "src": "/api/(.*)", "dest": "https://sl-dashboard-9115.onrender.com/$1" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/" }
+  ]
+}
