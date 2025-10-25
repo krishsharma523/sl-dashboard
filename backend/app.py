@@ -4,7 +4,7 @@ import os
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 # ---------------- Paths & dataset candidates ----------------
@@ -203,23 +203,46 @@ def _filter_by_selection(df: pd.DataFrame, commodity: str, region: str) -> pd.Da
 
     return out
 
-# --------------- Forecast ----------------
+# ---- helpers: robust forecast and graceful fallback ----
 def _holt_winters_forecast(y: pd.Series, periods: int) -> np.ndarray:
+    # Try HW if we have enough monthly-ish data; otherwise a simple linear drift
+    y = y.dropna().astype(float)
+    if len(y) == 0:
+        return np.full(periods, np.nan)
+
     try:
         from statsmodels.tsa.holtwinters import ExponentialSmoothing
-        if len(y.dropna()) >= 18:
+        if len(y) >= 18:
+            # give statsmodels a plain RangeIndex (avoid frequency warnings)
+            y_hw = y.copy()
+            y_hw.index = pd.RangeIndex(start=0, stop=len(y_hw))
             fit = ExponentialSmoothing(
-                y.astype(float), trend="add", seasonal="add", seasonal_periods=12, initialization_method="estimated"
+                y_hw, trend="add", seasonal="add", seasonal_periods=12, initialization_method="estimated"
             ).fit(optimized=True)
-            return fit.forecast(periods).astype(float).to_numpy()
+            fc = fit.forecast(periods)
+            return np.asarray(fc, dtype=float)
     except Exception:
         pass
-    vals = y.dropna().astype(float).values
-    if len(vals) == 0:
-        return np.full(periods, np.nan)
-    last = vals[-1]
-    slope = (vals[-1] - vals[-7]) / 6.0 if len(vals) >= 7 else 0.0
+
+    # simple fallback: last value + small slope from last 6 steps (if available)
+    last = float(y.iloc[-1])
+    slope = float((y.iloc[-1] - y.iloc[-7]) / 6.0) if len(y) >= 7 else 0.0
     return np.array([last + slope * (i + 1) for i in range(periods)], dtype=float)
+
+def _subset_or_fallback(commodity: str, region: str) -> Tuple[pd.DataFrame, str, bool]:
+    """
+    Returns (subset_df, used_region, did_fallback)
+    - falls back to 'All' (i.e., ignore region) if the regional subset has no usable price data.
+    """
+    sub = _filter_by_selection(DF, commodity, region)  # type: ignore
+    sub = sub.dropna(subset=[PRICE_COL, DATE_COL])
+    if not sub.empty and sub[PRICE_COL].notna().any():
+        return sub.sort_values(DATE_COL), region, False
+
+    # fallback to aggregate across regions
+    agg = _filter_by_selection(DF, commodity, "All")  # type: ignore
+    agg = agg.dropna(subset=[PRICE_COL, DATE_COL])
+    return agg.sort_values(DATE_COL), "All", True
 
 # --------------- API ----------------
 app = FastAPI()
@@ -269,21 +292,36 @@ def options():
 
 @app.get("/series")
 def series(commodity: str = Query("price"), region: str = Query("All"), months: int = Query(18)):
-    sub = _filter_by_selection(DF, commodity, region)  # type: ignore
-    sub = sub.dropna(subset=[PRICE_COL, DATE_COL]).sort_values(DATE_COL)
+    sub, used_region, did_fallback = _subset_or_fallback(commodity, region)
     if months and months > 0:
         sub = sub.tail(months)
     pts = [{"date": pd.to_datetime(d).date().isoformat(), "y": float(v)}
            for d, v in zip(sub[DATE_COL], sub[PRICE_COL])]
-    return {"points": pts}
+    return {"points": pts, "used_region": used_region, "fallback": did_fallback}
 
 @app.get("/predict")
 def predict(commodity: str, region: str = Query("All"), horizon: int = Query(1)):
-    sub = _filter_by_selection(DF, commodity, region)  # type: ignore
-    sub = sub.dropna(subset=[PRICE_COL, DATE_COL]).sort_values(DATE_COL)
-    if sub.empty:
-        # make the error explicit to the client
-        raise HTTPException(status_code=404, detail="no data for selection")
+    sub, used_region, did_fallback = _subset_or_fallback(commodity, region)
+
+    # if still nothing, return a benign 200 with nulls so UI can render gracefully
+    if sub.empty or sub[PRICE_COL].dropna().empty:
+        return {
+            "commodity": commodity,
+            "region": region,
+            "used_region": used_region,
+            "fallback": did_fallback,
+            "horizon": horizon,
+            "forecast_price": None,
+            "current_price": None,
+            "pct_change": None,
+            "future_date": None,
+            "kpi": {
+                "pred_1m": None, "pred_3m": None, "pred_6m": None,
+                "pct_change_1m": None, "pct_change_3m": None, "pct_change_6m": None,
+                "future_dates": {"1m": None, "3m": None, "6m": None},
+                "future_path": []
+            },
+        }
 
     current_price = float(sub[PRICE_COL].iloc[-1])
     last_date = pd.to_datetime(sub[DATE_COL].iloc[-1])
@@ -309,6 +347,8 @@ def predict(commodity: str, region: str = Query("All"), horizon: int = Query(1))
     return {
         "commodity": commodity,
         "region": region,
+        "used_region": used_region,
+        "fallback": did_fallback,
         "horizon": horizon,
         "forecast_price": bundle[key],
         "current_price": current_price,
