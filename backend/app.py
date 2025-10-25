@@ -37,6 +37,9 @@ def _read_any(p: Path) -> pd.DataFrame:
 def _norm(s: Optional[str]) -> str:
     return "" if s is None else str(s).strip().lower()
 
+def _norm_series(s: pd.Series) -> pd.Series:
+    return s.astype(str).str.strip().str.lower()
+
 def _label_from_region_flag_col(colname: str) -> str:
     # colname like "region_north western" -> "North Western"
     label = colname[len("region_"):].strip()
@@ -185,10 +188,12 @@ def _available_commodities() -> List[str]:
 
 def _filter_by_selection(df: pd.DataFrame, commodity: str, region: str) -> pd.DataFrame:
     out = df
+
     # commodity
     if TIDY_COMMODITY_COL:
         if commodity and _norm(commodity) != "price":
-            out = out[_norm(out[TIDY_COMMODITY_COL]) == _norm(commodity)]  # type: ignore
+            s = _norm_series(out[TIDY_COMMODITY_COL])  # type: ignore
+            out = out[s == _norm(commodity)]
     elif WIDE_COMMODITY_MAP and commodity and _norm(commodity) != "price":
         col = WIDE_COMMODITY_MAP.get(commodity)
         if col and col in out.columns:
@@ -197,9 +202,12 @@ def _filter_by_selection(df: pd.DataFrame, commodity: str, region: str) -> pd.Da
                 out = out[s.fillna(0) > 0]
             else:
                 out = out[out[col].astype(str).str.lower().isin(["1", "true", "yes"])]
+
     # region
     if region and _norm(region) not in ["", "all"]:
-        out = out[_norm(out[REGION_COL]) == _norm(region)]
+        s = _norm_series(out[REGION_COL])  # type: ignore
+        out = out[s == _norm(region)]
+
     return out
 
 # --------------- Forecast ----------------
