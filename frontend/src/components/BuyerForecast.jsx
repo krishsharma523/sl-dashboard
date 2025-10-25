@@ -4,9 +4,15 @@ import {
   CartesianGrid, Tooltip as RTooltip, Legend
 } from "recharts";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
+const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
 const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const fmt = (n) => (Number.isFinite(n) ? nf0.format(n) : "—");
+
+function monthsBetween(d1, d2) {
+  const a = new Date(d1);
+  const b = new Date(d2);
+  return Math.max(0, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()));
+}
 
 function QuickHorizons({ commodity, onPickDate }) {
   const [rows, setRows] = useState([]);
@@ -20,31 +26,34 @@ function QuickHorizons({ commodity, onPickDate }) {
       if (!commodity) return;
       setLoading(true); setErr(null);
       try {
-        const r = await fetch(`${API_BASE}/api/horizons?commodity=${encodeURIComponent(commodity)}&horizons=1,3,6`);
-        if (r.ok) {
-          const j = await r.json();
-          if (!alive) return;
-          setRows(j.results || []);
-          setMeta({ last_known: j.last_known, model: j.model });
-          setLoading(false);
-          return;
-        }
-        const hs = [1, 3, 6];
+        // 1) Last-known from /series
+        const rr = await fetch(
+          `${API_BASE}/series?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&months=24`
+        );
+        if (!rr.ok) throw new Error(`HTTP ${rr.status}`);
+        const jj = await rr.json();
+        const pts = Array.isArray(jj?.points) ? jj.points : [];
+        const last = pts[pts.length - 1] || null;
+        const lastKnown = last ? { date: last.date, price_sll: last.y } : null;
+
+        // 2) Predict for 1, 3, 6 months
+        const horizons = [1, 3, 6];
         const out = [];
-        let lastKnown = null;
-        for (const h of hs) {
-          const rr = await fetch(`${API_BASE}/api/buyer-forecast?commodity=${encodeURIComponent(commodity)}&h=${h}`);
-          if (!rr.ok) throw new Error(`HTTP ${rr.status}`);
-          const jj = await rr.json();
-          if (!lastKnown) lastKnown = jj.last_known;
+        for (const h of horizons) {
+          const pr = await fetch(
+            `${API_BASE}/predict?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&horizon=${h}`
+          );
+          if (!pr.ok) throw new Error(`HTTP ${pr.status}`);
+          const pj = await pr.json();
           out.push({
             h,
-            target_date: jj.target_date,
-            predicted_price: jj.predicted_price,
-            lo: (jj.path && jj.path.length) ? jj.path[jj.path.length-1].lo : undefined,
-            hi: (jj.path && jj.path.length) ? jj.path[jj.path.length-1].hi : undefined,
+            target_date: pj?.kpi?.future_dates?.[`${h}m`] || "",
+            predicted_price: pj?.kpi?.[`pred_${h}m`],
+            lo: undefined,
+            hi: undefined,
           });
         }
+
         if (!alive) return;
         setRows(out);
         setMeta({ last_known: lastKnown, model: "XGBoost" });
@@ -130,28 +139,51 @@ export default function BuyerForecast() {
 
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
+  // Load history from /series (last 60 months)
   useEffect(() => {
-    let alive = True = true;
+    let alive = true;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/history?commodity=${encodeURIComponent(commodity)}&months=60`);
+        const r = await fetch(
+          `${API_BASE}/series?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&months=60`
+        );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = await r.json();
-        if (True) setHistory(j);
+        if (!alive) return;
+        const points = Array.isArray(j?.points) ? j.points : [];
+        setHistory(points.map(p => ({ date: p.date, price: p.y })));
       } catch {}
     })();
-    return () => { True = false; };
+    return () => { alive = false; };
   }, [commodity]);
 
+  // Use nearest horizon (1/3/6) to the chosen date and call /predict
   async function onSearch() {
     if (!commodity || !buyDate) return;
     setErr(null); setLoading(true); setCurrent(null); setForecast(null);
     try {
-      const [c, f] = await Promise.all([
-        fetch(`${API_BASE}/api/current?commodity=${encodeURIComponent(commodity)}`).then(r => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(`${API_BASE}/api/buyer-forecast?commodity=${encodeURIComponent(commodity)}&date=${encodeURIComponent(buyDate)}`).then(r => (r.ok ? r.json() : Promise.reject(r)))
-      ]);
-      setCurrent(c); setForecast(f);
+      const last = history[history.length - 1];
+      const lastDate = last?.date;
+      const lastPrice = last?.price;
+      if (!lastDate) throw new Error("No history available yet.");
+
+      const m = monthsBetween(lastDate, buyDate);
+      const candidates = [1, 3, 6];
+      const horizon = candidates.reduce((best, h) =>
+        Math.abs(h - m) < Math.abs(best - m) ? h : best, candidates[0]);
+
+      const url = `${API_BASE}/predict?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&horizon=${horizon}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+
+      setCurrent({ date: lastDate, price_sll: lastPrice });
+      setForecast({
+        target_date: j?.kpi?.future_dates?.[`${horizon}m`] || "",
+        predicted_price: j?.kpi?.[`pred_${horizon}m`],
+        last_known: { date: lastDate, price_sll: lastPrice },
+        path: []
+      });
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
@@ -159,9 +191,10 @@ export default function BuyerForecast() {
     }
   }
 
-  async function handlePickDate(dateStr) {
+  function handlePickDate(dateStr) {
     setBuyDate(dateStr);
     setTimeout(onSearch, 0);
+    // intentionally not awaiting; UI remains responsive
   }
 
   const series = useMemo(() => {
