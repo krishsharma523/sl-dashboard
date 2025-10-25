@@ -12,7 +12,7 @@ import {
 import crest from "../assets/crest.png";
 import flag from "../assets/flag.png";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
 
 // ✅ Fixed region list for the dropdown
 const REGION_OPTIONS = [
