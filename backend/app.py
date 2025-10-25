@@ -84,15 +84,24 @@ def _detect_columns_and_prepare(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, st
     if not price_col:
         raise RuntimeError("Could not find a price column")
 
-    # region (prefer explicit)
+    # region (prefer explicit human-readable columns; put pop_region last)
     region_col = None
-    for k in ["market", "region", "pop_region", "district", "area", "market_name", "select market"]:
+    for k in ["market", "region", "district", "area", "market_name", "select market", "pop_region"]:
         if k in low:
             region_col = cols[low.index(k)]
             break
 
     df = df.copy()
-    # synthesize region if only one-hot flags exist
+
+    # --- guard: if chosen region column looks numeric, treat as not a region ---
+    if region_col is not None:
+        sample = df[region_col].astype(str).str.strip().head(50)
+        numeric_ratio = (sample.str.fullmatch(r"\d+").fillna(False).mean() if len(sample) else 0.0)
+        if numeric_ratio > 0.7:
+            # likely a population code column (e.g., pop_region). Ignore and synthesise from flags.
+            region_col = None
+
+    # synthesise region if only one-hot flags exist OR guard nulled region_col
     if region_col is None:
         region_flag_cols = [c for c in cols if c.lower().startswith("region_")]
         if region_flag_cols:
