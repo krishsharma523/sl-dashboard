@@ -11,14 +11,15 @@ import {
 import crest from "../assets/crest.png";
 import flag from "../assets/flag.png";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// ✅ Use dynamic env var for production, not localhost
+const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
 
 /** Consistent series colours */
 const COLORS = {
-  actual: "#adbac3ff",     // cyan
-  forecast: "#e64709ff", // orange/violet
-  ma: "#22c55e",         // green
-  band: "#0a0a0aff",     // neutral for CI fill
+  actual: "#adbac3ff",
+  forecast: "#e64709ff",
+  ma: "#22c55e",
+  band: "#0a0a0aff",
 };
 
 /** Helpers */
@@ -70,25 +71,24 @@ export default function CustomerPlanner() {
   const [commodity, setCommodity] = useState("Rice");
 
   const [hist, setHist] = useState([]); // [{date, y}]
-  const [bundle, setBundle] = useState({ "1": [], "3": [], "6": [] }); // {"1":[{date,yhat,lo,hi}],...}
+  const [bundle, setBundle] = useState({ "1": [], "3": [], "6": [] });
 
   const [loading, setLoading] = useState(true);
   const [chartType, setChartType] = useState("area");
   const [showMA, setShowMA] = useState(false);
   const [changeView, setChangeView] = useState(false);
 
-  /** Load commodity list once */
+  /** Load commodities (if backend provides /options) */
   useEffect(() => {
     const ctrl = new AbortController();
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/commodities`, { signal: ctrl.signal });
+        const r = await fetch(`${API_BASE}/options`, { signal: ctrl.signal });
         if (!r.ok) return;
         const list = await r.json();
-        if (Array.isArray(list) && list.length) setCommodityList(list);
-      } catch (_) {
-        /* ignore */
-      }
+        if (Array.isArray(list?.commodities) && list.commodities.length)
+          setCommodityList(list.commodities);
+      } catch (_) {}
     })();
     return () => ctrl.abort();
   }, []);
@@ -99,19 +99,31 @@ export default function CustomerPlanner() {
     (async () => {
       setLoading(true);
       try {
-        const [h, f] = await Promise.all([
-          fetch(
-            `${API_BASE}/api/history?commodity=${encodeURIComponent(commodity)}&months=18`,
-            { signal: ctrl.signal }
-          ).then((r) => (r.ok ? r.json() : null)),
-          fetch(
-            `${API_BASE}/api/forecast_bundle?commodity=${encodeURIComponent(commodity)}`,
-            { signal: ctrl.signal }
-          ).then((r) => (r.ok ? r.json() : null)),
-        ]);
+        // ✅ use /series and /predict endpoints
+        const histResp = await fetch(
+          `${API_BASE}/series?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&months=18`,
+          { signal: ctrl.signal }
+        );
+        if (!histResp.ok) throw new Error(`HTTP ${histResp.status}`);
+        const histData = await histResp.json();
+        const points = Array.isArray(histData?.points) ? histData.points : [];
+        setHist(points);
 
-        setHist(h?.points ?? []);
-        setBundle(f?.forecasts ?? { "1": [], "3": [], "6": [] });
+        // Fetch forecasts for 1, 3, 6 months from /predict
+        const horizons = [1, 3, 6];
+        const out = {};
+        for (const h of horizons) {
+          const r = await fetch(
+            `${API_BASE}/predict?commodity=${encodeURIComponent(commodity)}&region=${encodeURIComponent("All")}&horizon=${h}`,
+            { signal: ctrl.signal }
+          );
+          if (!r.ok) continue;
+          const j = await r.json();
+          const targetDate = j?.kpi?.future_dates?.[`${h}m`];
+          const pred = j?.kpi?.[`pred_${h}m`];
+          out[h.toString()] = [{ date: targetDate, yhat: pred, lo: null, hi: null }];
+        }
+        setBundle(out);
       } catch (_) {
         setHist([]);
         setBundle({ "1": [], "3": [], "6": [] });
@@ -123,21 +135,18 @@ export default function CustomerPlanner() {
   }, [commodity]);
 
   /** Headline values */
-  const currentPoint = useMemo(
-    () => (hist?.length ? hist[hist.length - 1] : null),
-    [hist]
-  );
+  const currentPoint = useMemo(() => (hist?.length ? hist[hist.length - 1] : null), [hist]);
   const currentPrice = currentPoint?.y ?? null;
 
-  const next1 = bundle["1"]?.[bundle["1"].length - 1];
-  const next3 = bundle["3"]?.[bundle["3"].length - 1];
-  const next6 = bundle["6"]?.[bundle["6"].length - 1];
+  const next1 = bundle["1"]?.[0];
+  const next3 = bundle["3"]?.[0];
+  const next6 = bundle["6"]?.[0];
 
   const pc1 = pctChange(next1?.yhat, currentPrice);
   const pc3 = pctChange(next3?.yhat, currentPrice);
   const pc6 = pctChange(next6?.yhat, currentPrice);
 
-  /** Base chart rows: history + 6-month forecast band */
+  /** Base chart rows: history + 6-month forecast */
   const chartData = useMemo(() => {
     const f6 = bundle["6"] || [];
     const histRows = (hist || []).map((p) => ({ date: p.date, actual: p.y }));
@@ -150,7 +159,7 @@ export default function CustomerPlanner() {
     return [...histRows, ...foreRows];
   }, [hist, bundle]);
 
-  /** SMA(3) and optional month-over-month change view */
+  /** Moving Average + MoM Change View */
   const enrichedData = useMemo(() => {
     const movingAverage = (arr, k = 3) =>
       arr.map((_, i) => {
@@ -162,13 +171,9 @@ export default function CustomerPlanner() {
     const data = chartData.map((d) => ({ ...d }));
 
     if (showMA) {
-      const actuals = data.map((d) =>
-        Number.isFinite(d.actual) ? Number(d.actual) : null
-      );
+      const actuals = data.map((d) => (Number.isFinite(d.actual) ? Number(d.actual) : null));
       const ma3 = movingAverage(actuals, 3);
-      data.forEach((d, i) => {
-        d.ma3 = ma3[i];
-      });
+      data.forEach((d, i) => (d.ma3 = ma3[i]));
     }
 
     if (changeView) {
@@ -179,33 +184,23 @@ export default function CustomerPlanner() {
           Number.isFinite(prev) && Number.isFinite(curr) ? curr - prev : null;
       }
     }
-
     return data;
   }, [chartData, showMA, changeView]);
 
-  /** X ticks: aim for ~8 labels */
   const xInterval = Math.max(0, Math.floor(Math.max(enrichedData.length, 1) / 8));
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="relative max-w-6xl mx-auto pt-6 pb-2">
-        <img
-          src={crest}
-          alt="Sierra Leone Coat of Arms"
-          className="pointer-events-none select-none absolute left-0 top-1 h-15 w-auto md:h-16"
-        />
-        <img
-          src={flag}
-          alt="Sierra Leone Flag"
-          className="pointer-events-none select-none absolute right-0 top-1 h-15 w-auto md:h-16"
-        />
+        <img src={crest} alt="Sierra Leone Coat of Arms" className="absolute left-0 top-1 h-15 md:h-16" />
+        <img src={flag} alt="Sierra Leone Flag" className="absolute right-0 top-1 h-15 md:h-16" />
         <div className="text-center">
           <h1 className="text-2xl md:text-3xl font-extrabold text-black">
             AI and Machine Learning Solutions for Retailer Food Price Forecasting in Sierra Leone – Dashboard
           </h1>
           <p className="text-sm mt-1 font-bold">
-            Please pick a commodity from the drop-down and see the predicted prices in 1, 3, and 6 months.
+            Please pick a commodity and see predicted prices in 1, 3, and 6 months.
           </p>
         </div>
       </div>
@@ -214,9 +209,7 @@ export default function CustomerPlanner() {
       <div className="rounded-2xl border bg-white p-4 md:p-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block" htmlFor="commodity">
-              Select commodity
-            </label>
+            <label className="text-xs mb-1 block" htmlFor="commodity">Select commodity</label>
             <select
               id="commodity"
               className="w-full border rounded-lg p-2 bg-white"
@@ -224,17 +217,13 @@ export default function CustomerPlanner() {
               onChange={(e) => setCommodity(e.target.value)}
             >
               {commodityList.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
+                <option key={c} value={c}>{c}</option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block" htmlFor="chartType">
-              Chart type
-            </label>
+            <label className="text-xs mb-1 block" htmlFor="chartType">Chart type</label>
             <select
               id="chartType"
               className="w-full border rounded-lg p-2 bg-white"
@@ -250,64 +239,23 @@ export default function CustomerPlanner() {
 
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={showMA}
-                onChange={(e) => setShowMA(e.target.checked)}
-              />
+              <input type="checkbox" className="h-4 w-4" checked={showMA} onChange={(e) => setShowMA(e.target.checked)} />
               <span className="text-sm">3-mo moving average</span>
             </label>
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={changeView}
-                onChange={(e) => setChangeView(e.target.checked)}
-              />
+              <input type="checkbox" className="h-4 w-4" checked={changeView} onChange={(e) => setChangeView(e.target.checked)} />
               <span className="text-sm">Show MoM change</span>
             </label>
           </div>
         </div>
       </div>
 
-      {/* Summary tiles */}
+      {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard
-          title="Current price"
-          value={currentPrice == null ? "…" : `${fmtCurrency(currentPrice)} SLL`}
-          sub={currentPoint?.date ? `as of ${currentPoint.date}` : ""}
-        />
-        <StatCard
-          title="Price in 1 month"
-          value={loading || !next1 ? "…" : `${fmtCurrency(next1.yhat)} SLL`}
-          sub={
-            loading || !next1
-              ? ""
-              : `around ${next1.date} (≈ ${fmtCurrency(next1.lo)}–${fmtCurrency(next1.hi)})`
-          }
-          changePct={pc1}
-        />
-        <StatCard
-          title="Price in 3 months"
-          value={loading || !next3 ? "…" : `${fmtCurrency(next3.yhat)} SLL`}
-          sub={
-            loading || !next3
-              ? ""
-              : `around ${next3.date} (≈ ${fmtCurrency(next3.lo)}–${fmtCurrency(next3.hi)})`
-          }
-          changePct={pc3}
-        />
-        <StatCard
-          title="Price in 6 months"
-          value={loading || !next6 ? "…" : `${fmtCurrency(next6.yhat)} SLL`}
-          sub={
-            loading || !next6
-              ? ""
-              : `around ${next6.date} (≈ ${fmtCurrency(next6.lo)}–${fmtCurrency(next6.hi)})`
-          }
-          changePct={pc6}
-        />
+        <StatCard title="Current price" value={currentPrice == null ? "…" : `${fmtCurrency(currentPrice)} SLL`} sub={currentPoint?.date ? `as of ${currentPoint.date}` : ""} />
+        <StatCard title="Price in 1 month" value={next1 ? `${fmtCurrency(next1.yhat)} SLL` : "…"} changePct={pc1} />
+        <StatCard title="Price in 3 months" value={next3 ? `${fmtCurrency(next3.yhat)} SLL` : "…"} changePct={pc3} />
+        <StatCard title="Price in 6 months" value={next6 ? `${fmtCurrency(next6.yhat)} SLL` : "…"} changePct={pc6} />
       </div>
 
       {/* Chart */}
@@ -318,16 +266,16 @@ export default function CustomerPlanner() {
         <div className="h-[360px] w-full">
           <ResponsiveContainer>
             {changeView ? (
-              <BarChart data={enrichedData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <BarChart data={enrichedData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" interval={xInterval} />
-                <YAxis tickFormatter={(v) => (v > 0 ? `+${fmtCurrency(v)}` : fmtCurrency(v))} />
+                <YAxis tickFormatter={fmtCurrency} />
                 <Tooltip formatter={(v, n) => [fmtCurrency(v), n]} />
                 <Legend />
                 <Bar dataKey="mom" name="MoM change" fill={COLORS.forecast} />
               </BarChart>
             ) : chartType === "line" ? (
-              <LineChart data={enrichedData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <LineChart data={enrichedData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" interval={xInterval} />
                 <YAxis tickFormatter={fmtCurrency} />
@@ -335,12 +283,10 @@ export default function CustomerPlanner() {
                 <Legend />
                 <Line type="monotone" dataKey="actual" name="Actual" stroke={COLORS.actual} dot={false} />
                 <Line type="monotone" dataKey="forecast" name="Forecast" stroke={COLORS.forecast} dot={false} />
-                {showMA && (
-                  <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />
-                )}
+                {showMA && <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />}
               </LineChart>
             ) : chartType === "bar" ? (
-              <BarChart data={enrichedData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <BarChart data={enrichedData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" interval={xInterval} />
                 <YAxis tickFormatter={fmtCurrency} />
@@ -350,7 +296,7 @@ export default function CustomerPlanner() {
                 <Bar dataKey="forecast" name="Forecast" fill={COLORS.forecast} />
               </BarChart>
             ) : chartType === "composed" ? (
-              <ComposedChart data={enrichedData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <ComposedChart data={enrichedData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" interval={xInterval} />
                 <YAxis tickFormatter={fmtCurrency} />
@@ -358,41 +304,18 @@ export default function CustomerPlanner() {
                 <Legend />
                 <Bar dataKey="actual" name="Actual" fill={COLORS.actual} />
                 <Line type="monotone" dataKey="forecast" name="Forecast" stroke={COLORS.forecast} dot={false} />
-                {showMA && (
-                  <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />
-                )}
+                {showMA && <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />}
               </ComposedChart>
             ) : (
-              <AreaChart data={enrichedData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                <defs>
-                  <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={COLORS.forecast} stopOpacity={0.25} />
-                    <stop offset="95%" stopColor={COLORS.forecast} stopOpacity={0.02} />
-                  </linearGradient>
-                  <linearGradient id="gBand" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={COLORS.band} stopOpacity={0.2} />
-                    <stop offset="95%" stopColor={COLORS.band} stopOpacity={0.04} />
-                  </linearGradient>
-                </defs>
+              <AreaChart data={enrichedData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" interval={xInterval} />
                 <YAxis tickFormatter={fmtCurrency} />
                 <Tooltip formatter={(v, n) => [fmtCurrency(v), n]} />
                 <Legend />
                 <Area type="monotone" dataKey="actual" name="Actual" stroke={COLORS.actual} fillOpacity={0} dot={false} />
-                <Area
-                  type="monotone"
-                  dataKey="forecast"
-                  name="Forecast"
-                  stroke={COLORS.forecast}
-                  fill="url(#gForecast)"
-                  dot={false}
-                />
-                <Area type="monotone" dataKey="hi" stroke="transparent" fillOpacity={0.4} fill="url(#gBand)" />
-                <Area type="monotone" dataKey="lo" stroke="transparent" fillOpacity={0.4} fill="url(#gBand)" />
-                {showMA && (
-                  <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />
-                )}
+                <Area type="monotone" dataKey="forecast" name="Forecast" stroke={COLORS.forecast} fillOpacity={0.1} dot={false} />
+                {showMA && <Line type="monotone" dataKey="ma3" name="3-mo MA" stroke={COLORS.ma} dot={false} />}
               </AreaChart>
             )}
           </ResponsiveContainer>
@@ -401,4 +324,3 @@ export default function CustomerPlanner() {
     </div>
   );
 }
-
